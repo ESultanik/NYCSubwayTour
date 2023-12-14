@@ -54,10 +54,26 @@ class Transfer:
         )
 
 
+class Edge:
+    def __init__(self, from_id: str, to_id: str, duration: float, intermediate_stops: Iterable[str] = ()):
+        self.from_id: str = from_id
+        self.to_id: str = to_id
+        self.duration: float = duration
+        self.intermediate_stops: [str] = list(intermediate_stops)
+
+    def __hash__(self):
+        return hash((self.from_id, self.to_id))
+
+    def __eq__(self, other):
+        return isinstance(other, Edge) and other.from_id == self.from_id and other.to_id == self.to_id
+
+
+class DoTransfer(Edge):
+    pass
+
+
 class Feed:
-    def __init__(
-            self, stops: Iterable[Stop], transfers: Iterable[Transfer], edges: Iterable[tuple[tuple[str, str], float]]
-    ):
+    def __init__(self, stops: Iterable[Stop], transfers: Iterable[Transfer], edges: Iterable[Edge]):
         self.transfers: {str: {str: Transfer}} = {}
         for transfer in transfers:
             if transfer.from_stop not in self.transfers:
@@ -80,14 +96,16 @@ class Feed:
             if stop.parent_station is None
         }
 
-        self.edges: {str: {str: float}} = {}
-        for (from_stop, to_stop), duration in edges:
-            from_stop = self.stop_equivalents[from_stop]
-            to_stop = self.stop_equivalents[to_stop]
+        self.edges: {str: {str: Edge}} = {}
+        for edge in edges:
+            from_stop = self.stop_equivalents[edge.from_id]
+            to_stop = self.stop_equivalents[edge.to_id]
+            edge.from_id = from_stop
+            edge.to_id = to_stop
             if from_stop not in self.edges:
-                self.edges[from_stop] = {to_stop: duration}
+                self.edges[from_stop] = {to_stop: edge}
             else:
-                self.edges[from_stop][to_stop] = duration
+                self.edges[from_stop][to_stop] = edge
 
         # Remove any stops that have no neighbors
         islanded_stops = {
@@ -145,18 +163,18 @@ class Feed:
             return 0
         d = float('inf')
         if from_stop in self.edges and to_stop in self.edges[from_stop]:
-            d = self.edges[from_stop][to_stop]
+            d = self.edges[from_stop][to_stop].duration
         if from_stop in self.transfers and to_stop in self.transfers[from_stop]:
             d = min(d, self.transfers[from_stop][to_stop].min_transfer_time)
         return d
 
-    def neighbors(self, from_stop: str) -> Iterator[tuple[str, float]]:
+    def neighbors(self, from_stop: str) -> Iterator[Edge]:
         if from_stop in self.edges:
-            yield from self.edges[from_stop].items()
+            yield from self.edges[from_stop].values()
         if from_stop in self.transfers:
             for to_stop, transfer in self.transfers[from_stop].items():
                 if from_stop != to_stop:
-                    yield to_stop, transfer.min_transfer_time
+                    yield DoTransfer(from_stop, to_stop, transfer.min_transfer_time)
 
     @classmethod
     def load_or_download(cls, download_url: str, path: Optional[Path] = None) -> "Feed":
@@ -184,9 +202,11 @@ class Feed:
             raise ValueError(f"argument must be a Path, str, or ZipFile, not {path_or_url!r}")
         if path_or_url.is_file():
             return cls.load(ZipFile(path_or_url))
-        # this is a directory
 
-        edges: {(str, str): [int]} = {}
+        # this is a directory
+        edges: dict[tuple[str, str], list[int]] = {}
+        trips: dict[str, list[str]] = {}
+        trips_by_stop: dict[str, set[str]] = {}
         with open(path_or_url / "stop_times.txt") as f:
             # skip the first line because it is a header
             _ = next(iter(f))
@@ -196,6 +216,11 @@ class Feed:
             last_arrival_time = 0
             for line in f:
                 trip_id, stop_id, arrival_time, departure_time, stop_sequence = line.strip().split(",")
+                trip_id = trip_id.strip()
+                if stop_id not in trips_by_stop:
+                    trips_by_stop[stop_id] = {trip_id}
+                else:
+                    trips_by_stop[stop_id].add(trip_id)
                 arrival_hour, arrival_min, arrival_sec = map(int, arrival_time.split(":"))
                 arrival_time = arrival_hour * 60 * 60 + arrival_min * 60 + arrival_sec
                 stop_sequence = int(stop_sequence)
@@ -211,13 +236,32 @@ class Feed:
                 last_seq = stop_sequence
                 last_stop_id = stop_id
                 last_arrival_time = arrival_time
-
+                if trip_id not in trips:
+                    trips[trip_id] = [stop_id]
+                else:
+                    trips[trip_id].append(stop_id)
+        edges: list[Edge] = [
+            Edge(from_id, to_id, sum(times) / len(times))
+            for (from_id, to_id), times in edges.items()
+        ]
+        # is there any trip where we pass through a station (e.g., an express train?)
+        for edge in tqdm(edges, desc="Finding intermediate stops...", unit="edges", leave=False):
+            intermediates: set[tuple[str, ...]] = set()
+            for trip in trips_by_stop[edge.from_id] | trips_by_stop[edge.to_id]:
+                try:
+                    from_id_index = trip.index(edge.from_id)
+                    to_id_index = trip.index(edge.to_id)
+                except ValueError:
+                    continue
+                intermediate_stops = tuple(trip[from_id_index+1:to_id_index])
+                if intermediate_stops:
+                    intermediates.add(intermediate_stops)
+            assert len(intermediates) <= 1
+            if intermediates:
+                edge.intermediate_stops = list(next(iter(intermediates)))
         with open(path_or_url / "stops.txt") as f:
             # skip the first line because it is a header
             _ = next(iter(f))
             with open(path_or_url / "transfers.txt") as t:
                 _ = next(iter(t))
-                return cls(stops=map(Stop.parse, f), transfers=map(Transfer.parse, t), edges=[
-                    (edge, sum(times) / len(times))
-                    for edge, times in edges.items()
-                ])
+                return cls(stops=map(Stop.parse, f), transfers=map(Transfer.parse, t), edges=edges)

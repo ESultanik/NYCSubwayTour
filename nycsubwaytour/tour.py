@@ -6,6 +6,8 @@ from .gtfs import Feed, Stop, Transfer
 
 
 def heuristic(feed: Feed, from_node: str, remaining_stops: frozenset[str]) -> float:
+    if from_node not in feed.shortest_path_lengths:
+        breakpoint()
     return sum(
         feed.shortest_path_lengths[from_node][stop]
         for stop in remaining_stops
@@ -38,13 +40,15 @@ class SearchNode:
             return
         neighbors = list(feed.neighbors(self.path[-1]))
         # if there are new directions we've never visited, don't yield any place we have already visited
-        has_new_neighbors = any(n in self.remaining_stops for n, _ in neighbors)
-        for neighbor, duration in neighbors:
+        has_new_neighbors = any(edge.to_id in self.remaining_stops for edge in neighbors)
+        for edge in neighbors:
+            neighbor = edge.to_id
+            duration = edge.duration
             if has_new_neighbors and neighbor not in self.remaining_stops:
                 # we've already visited this neighbor and there are new ones to try, so skip!
                 continue
             cost = self.path_cost + duration
-            remaining = self.remaining_stops - {neighbor}
+            remaining = self.remaining_stops - {neighbor} - set(edge.intermediate_stops)
             yield SearchNode(
                 path=self.path + (neighbor,),
                 path_cost=cost,
