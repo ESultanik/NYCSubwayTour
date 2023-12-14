@@ -63,14 +63,22 @@ class SearchNode:
 
 def search(feed: Feed) -> SearchNode:
     queue: [SearchNode] = [SearchNode(remaining_stops=frozenset(feed.stops.keys()))]
+    history: dict[tuple[str, frozenset[str]], float] = {}
     i = 0
+    pruned = 0
     while queue:
         node = heapq.heappop(queue)
         i += 1
         if i % 1000 == 0:
-            print(f"Best so far: {node!s}\tQueued: {len(queue)}")
+            print(f"Best so far: {node!s}\tQueued: {len(queue)}\tPruned: {pruned}")
         if not node.remaining_stops:
             return node
         for succ in node.successors(feed=feed):
+            state = (succ.path[-1], succ.remaining_stops)
+            if state in history:
+                if history[state] <= succ.f_cost:
+                    pruned += 1
+                    continue
+            history[state] = succ.f_cost
             heapq.heappush(queue, succ)
     raise ValueError("No solution!")
