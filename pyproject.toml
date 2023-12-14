@@ -1,0 +1,26 @@
+[project]
+name = "nycsubwaytour"
+version = "0.0.1"
+description = "Finds an optimal tour of all NYC subway stations."
+authors = [
+    {name = "Evan Sultanik", email="evan@sultanik.com"},
+]
+license = {file = "LICENSE.txt"}
+readme = "README.md"
+requires-python = ">=3.11"
+
+keywords = []
+
+dependencies = []
+
+[project.urls]
+homepage = "https://github.com/ESultanik/advent-of-code-2023"
+documentation = "https://github.com/ESultanik/advent-of-code-2023"
+repository = "https://github.com/ESultanik/advent-of-code-2023"
+
+[project.scripts]
+nycsubwaytour = "nycsubwaytour.__main__:main"
+
+[build-system]
+requires = ["flit_core >=3.2,<4"]
+build-backend = "flit_core.buildapi"
