@@ -40,21 +40,26 @@ class SearchNode:
             return
         neighbors = list(feed.neighbors(self.path[-1]))
         # if there are new directions we've never visited, don't yield any place we have already visited
-        has_new_neighbors = any(edge.to_id in self.remaining_stops for edge in neighbors)
+        new_neighbors = [edge for edge in neighbors if edge.to_id in self.remaining_stops]
         for edge in neighbors:
             neighbor = edge.to_id
             duration = edge.duration
-            if has_new_neighbors and neighbor not in self.remaining_stops:
+            if len(new_neighbors) > 0 and neighbor not in self.remaining_stops:
                 # we've already visited this neighbor and there are new ones to try, so skip!
                 continue
             cost = self.path_cost + duration
             remaining = self.remaining_stops - {neighbor} - set(edge.intermediate_stops)
-            yield SearchNode(
+            succ = SearchNode(
                 path=self.path + (neighbor,),
                 path_cost=cost,
                 remaining_stops=remaining,
                 f_cost=cost + heuristic(feed, neighbor, remaining)
             )
+            if len(new_neighbors) == 1:
+                yield from succ.successors(feed)
+                return
+            else:
+                yield succ
 
     def __str__(self):
         return (f"{len(self.path)} stops ({self.path_cost / 60 / 60:.1f}hrs), "
