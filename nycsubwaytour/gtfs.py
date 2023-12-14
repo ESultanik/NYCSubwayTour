@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 from io import BytesIO
+import itertools
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Iterable, Iterator, Optional
@@ -102,6 +103,7 @@ class Feed:
             to_stop = self.stop_equivalents[edge.to_id]
             edge.from_id = from_stop
             edge.to_id = to_stop
+            edge.intermediate_stops = [self.stop_equivalents[s] for s in edge.intermediate_stops]
             if from_stop not in self.edges:
                 self.edges[from_stop] = {to_stop: edge}
             else:
@@ -247,7 +249,8 @@ class Feed:
         # is there any trip where we pass through a station (e.g., an express train?)
         for edge in tqdm(edges, desc="Finding intermediate stops...", unit="edges", leave=False):
             intermediates: set[tuple[str, ...]] = set()
-            for trip in trips_by_stop[edge.from_id] | trips_by_stop[edge.to_id]:
+            for trip_id in trips_by_stop[edge.from_id] | trips_by_stop[edge.to_id]:
+                trip = trips[trip_id]
                 try:
                     from_id_index = trip.index(edge.from_id)
                     to_id_index = trip.index(edge.to_id)
@@ -256,7 +259,9 @@ class Feed:
                 intermediate_stops = tuple(trip[from_id_index+1:to_id_index])
                 if intermediate_stops:
                     intermediates.add(intermediate_stops)
-            assert len(intermediates) <= 1
+            if len(intermediates) > 1:
+                # TODO: Find a better way to do this!
+                intermediates = {tuple(itertools.chain(*intermediates))}
             if intermediates:
                 edge.intermediate_stops = list(next(iter(intermediates)))
         with open(path_or_url / "stops.txt") as f:
