@@ -54,7 +54,9 @@ class Transfer:
 
 
 class Feed:
-    def __init__(self, stops: Iterable[Stop], transfers: Iterable[Transfer]):
+    def __init__(
+            self, stops: Iterable[Stop], transfers: Iterable[Transfer], edges: Iterable[tuple[tuple[int, int], float]]
+    ):
         self.stops: {int: Stop} = {
             stop.stop_id: stop
             for stop in stops
@@ -63,6 +65,7 @@ class Feed:
             (transfer.from_stop, transfer.to_stop): transfer
             for transfer in transfers
         }
+        self.edges: {tuple[int, int]: float} = dict(edges)
 
     @classmethod
     def load_or_download(cls, download_url: str, path: Optional[Path] = None) -> "Feed":
@@ -91,9 +94,39 @@ class Feed:
         if path_or_url.is_file():
             return cls.load(ZipFile(path_or_url))
         # this is a directory
+
+        edges: {(str, str): [int]} = {}
+        with open(path_or_url / "stop_times.txt") as f:
+            # skip the first line because it is a header
+            _ = next(iter(f))
+            last_trip_id = ""
+            last_seq = -1
+            last_stop_id = -1
+            last_arrival_time = 0
+            for line in f:
+                trip_id, stop_id, arrival_time, departure_time, stop_sequence = line.strip().split(",")
+                arrival_hour, arrival_min, arrival_sec = map(int, arrival_time.split(":"))
+                arrival_time = arrival_hour * 60 * 60 + arrival_min * 60 + arrival_sec
+                stop_sequence = int(stop_sequence)
+                if trip_id == last_trip_id and stop_sequence == last_seq + 1:
+                    while arrival_time < last_arrival_time:
+                        arrival_time += 24 * 60 * 60
+                    edge = (last_stop_id, stop_id)
+                    if edge not in edges:
+                        edges[edge] = [arrival_time - last_arrival_time]
+                    else:
+                        edges[edge].append(arrival_time - last_arrival_time)
+                last_trip_id = trip_id
+                last_seq = stop_sequence
+                last_stop_id = stop_id
+                last_arrival_time = arrival_time
+
         with open(path_or_url / "stops.txt") as f:
             # skip the first line because it is a header
             _ = next(iter(f))
             with open(path_or_url / "transfers.txt") as t:
                 _ = next(iter(t))
-                return cls(stops=map(Stop.parse, f), transfers=map(Transfer.parse, t))
+                return cls(stops=map(Stop.parse, f), transfers=map(Transfer.parse, t), edges=[
+                    (edge, sum(times) / len(times))
+                    for edge, times in edges.items()
+                ])
