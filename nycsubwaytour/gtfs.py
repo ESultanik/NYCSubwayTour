@@ -2,9 +2,11 @@ from dataclasses import dataclass
 from io import BytesIO
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from typing import Iterable, Optional
+from typing import Iterable, Iterator, Optional
 import urllib.request
 from zipfile import ZipFile
+
+from tqdm import tqdm
 
 
 @dataclass(frozen=True, slots=True, unsafe_hash=True)
@@ -14,7 +16,7 @@ class Stop:
     lat: float
     lon: float
     location_type: Optional[int]
-    parent_station: Optional[int]
+    parent_station: Optional[str]
 
     @classmethod
     def parse(cls, line: str) -> "Stop":
@@ -23,9 +25,8 @@ class Stop:
             location_type = int(location_type)
         except ValueError:
             location_type = None
-        try:
-            parent_station = int(parent_station)
-        except ValueError:
+        parent_station = parent_station.strip()
+        if not parent_station:
             parent_station = None
         return cls(
             stop_id=stop_id,
@@ -55,17 +56,100 @@ class Transfer:
 
 class Feed:
     def __init__(
-            self, stops: Iterable[Stop], transfers: Iterable[Transfer], edges: Iterable[tuple[tuple[int, int], float]]
+            self, stops: Iterable[Stop], transfers: Iterable[Transfer], edges: Iterable[tuple[tuple[str, str], float]]
     ):
-        self.stops: {int: Stop} = {
+        self.transfers: {str: {str: Transfer}} = {}
+        for transfer in transfers:
+            if transfer.from_stop not in self.transfers:
+                self.transfers[transfer.from_stop] = {transfer.to_stop: transfer}
+            else:
+                self.transfers[transfer.from_stop][transfer.to_stop] = transfer
+
+        all_stops: {str: Stop} = {
             stop.stop_id: stop
             for stop in stops
         }
-        self.transfers: {(int, int): Transfer} = {
-            (transfer.from_stop, transfer.to_stop): transfer
-            for transfer in transfers
+        self.stop_equivalents: {str: str} = {}
+        for stop_id, stop in all_stops.items():
+            while stop.parent_station is not None:
+                stop = all_stops[stop.parent_station]
+            self.stop_equivalents[stop_id] = stop.stop_id
+        self.stops: {str: Stop} = {
+            stop.stop_id: stop
+            for stop in all_stops.values()
+            if stop.parent_station is None
         }
-        self.edges: {tuple[int, int]: float} = dict(edges)
+
+        self.edges: {str: {str: float}} = {}
+        for (from_stop, to_stop), duration in edges:
+            from_stop = self.stop_equivalents[from_stop]
+            to_stop = self.stop_equivalents[to_stop]
+            if from_stop not in self.edges:
+                self.edges[from_stop] = {to_stop: duration}
+            else:
+                self.edges[from_stop][to_stop] = duration
+
+        # Remove any stops that have no neighbors
+        islanded_stops = {
+            stop
+            for stop in self.stops.keys()
+            if sum(1 for _ in self.neighbors(stop)) == 0
+        }
+        for stop in islanded_stops:
+            del self.stops[stop]
+
+        apsp_path = Path("shortest_path_lengths.txt")
+        self.shortest_path_lengths: dict[str: dict[str: float]] = {}
+        if apsp_path.exists():
+            with open(apsp_path, "r") as f:
+                for line in f:
+                    from_stop, to_stop, distance = (s.strip() for s in line.strip().split(","))
+                    distance = float(distance)
+                    if from_stop not in self.shortest_path_lengths:
+                        self.shortest_path_lengths[from_stop] = {to_stop: distance}
+                    else:
+                        self.shortest_path_lengths[from_stop][to_stop] = distance
+        else:
+            ordered_stops = list(self.stops.keys())
+            self.shortest_path_lengths: dict[str: dict[str: float]] = {
+                from_stop: {
+                    to_stop: self.distance(from_stop, to_stop)
+                    for to_stop in ordered_stops
+                }
+                for from_stop in ordered_stops
+            }
+            for k in tqdm(ordered_stops, leave=False, unit="stops", desc="calculating shortest paths"):
+                for i in ordered_stops:
+                    for j in ordered_stops:
+                        dist = self.shortest_path_lengths[i][k] + self.shortest_path_lengths[k][j]
+                        if self.shortest_path_lengths[i][j] > dist:
+                            self.shortest_path_lengths[i][j] = dist
+            with open(apsp_path, "w") as f:
+                for from_stop, lengths in self.shortest_path_lengths.items():
+                    for to_stop, distance in lengths.items():
+                        f.write(f"{from_stop},{to_stop},{distance}\n")
+        for from_node, distances in self.shortest_path_lengths.items():
+            for to_node, distance in distances.items():
+                if distance >= float('inf'):
+                    raise ValueError(f"There is no path from {from_node} to {to_node}!")
+
+    def distance(self, from_stop: str, to_stop: str) -> float:
+        if from_stop == to_stop:
+            return 0
+        d = float('inf')
+        if from_stop in self.edges and to_stop in self.edges[from_stop]:
+            d = self.edges[from_stop][to_stop]
+        if from_stop in self.transfers and to_stop in self.transfers[from_stop]:
+            d = min(d, self.transfers[from_stop][to_stop].min_transfer_time)
+        return d
+
+    def neighbors(self, from_stop: str) -> Iterator[tuple[str, float]]:
+        if from_stop in self.edges:
+            yield from self.edges[from_stop].items()
+        if from_stop in self.transfers:
+            for to_stop, transfer in self.transfers[from_stop].items():
+                if from_stop != to_stop:
+                    yield to_stop, transfer.min_transfer_time
 
     @classmethod
     def load_or_download(cls, download_url: str, path: Optional[Path] = None) -> "Feed":

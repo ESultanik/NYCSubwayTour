@@ -1,9 +1,10 @@
-from pathlib import Path
 from .gtfs import Feed
+from .tour import search
 
 
 def main() -> int:
-    Feed.load_or_download("http://web.mta.info/developers/data/nyct/subway/google_transit.zip")
+    feed = Feed.load_or_download("http://web.mta.info/developers/data/nyct/subway/google_transit.zip")
+    print(search(feed))
     return 0
 
 
