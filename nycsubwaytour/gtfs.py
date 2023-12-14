@@ -98,20 +98,26 @@ class Feed:
         for stop in islanded_stops:
             del self.stops[stop]
 
+        self._shortest_path_lengths: Optional[dict[str: dict[str: float]]] = None
+
+    @property
+    def shortest_path_lengths(self) -> dict[str: dict[str: float]]:
+        if self._shortest_path_lengths is not None:
+            return self._shortest_path_lengths
+        self._shortest_path_lengths = {}
         apsp_path = Path("shortest_path_lengths.txt")
-        self.shortest_path_lengths: dict[str: dict[str: float]] = {}
         if apsp_path.exists():
             with open(apsp_path, "r") as f:
                 for line in f:
                     from_stop, to_stop, distance = (s.strip() for s in line.strip().split(","))
                     distance = float(distance)
-                    if from_stop not in self.shortest_path_lengths:
-                        self.shortest_path_lengths[from_stop] = {to_stop: distance}
+                    if from_stop not in self._shortest_path_lengths:
+                        self._shortest_path_lengths[from_stop] = {to_stop: distance}
                     else:
-                        self.shortest_path_lengths[from_stop][to_stop] = distance
+                        self._shortest_path_lengths[from_stop][to_stop] = distance
         else:
             ordered_stops = list(self.stops.keys())
-            self.shortest_path_lengths: dict[str: dict[str: float]] = {
+            self._shortest_path_lengths: dict[str: dict[str: float]] = {
                 from_stop: {
                     to_stop: self.distance(from_stop, to_stop)
                     for to_stop in ordered_stops
@@ -121,17 +127,18 @@ class Feed:
             for k in tqdm(ordered_stops, leave=False, unit="stops", desc="calculating shortest paths"):
                 for i in ordered_stops:
                     for j in ordered_stops:
-                        dist = self.shortest_path_lengths[i][k] + self.shortest_path_lengths[k][j]
-                        if self.shortest_path_lengths[i][j] > dist:
-                            self.shortest_path_lengths[i][j] = dist
+                        dist = self._shortest_path_lengths[i][k] + self._shortest_path_lengths[k][j]
+                        if self._shortest_path_lengths[i][j] > dist:
+                            self._shortest_path_lengths[i][j] = dist
             with open(apsp_path, "w") as f:
-                for from_stop, lengths in self.shortest_path_lengths.items():
+                for from_stop, lengths in self._shortest_path_lengths.items():
                     for to_stop, distance in lengths.items():
                         f.write(f"{from_stop},{to_stop},{distance}\n")
-        for from_node, distances in self.shortest_path_lengths.items():
+        for from_node, distances in self._shortest_path_lengths.items():
             for to_node, distance in distances.items():
                 if distance >= float('inf'):
                     raise ValueError(f"There is no path from {from_node} to {to_node}!")
+        return self._shortest_path_lengths
 
     def distance(self, from_stop: str, to_stop: str) -> float:
         if from_stop == to_stop:
