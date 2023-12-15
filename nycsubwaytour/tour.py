@@ -2,7 +2,25 @@ from dataclasses import dataclass
 import heapq
 from typing import Iterator
 
-from .gtfs import Feed
+import networkx as nx
+
+from .gtfs import Feed, Stop
+
+
+def approximate(feed: Feed) -> list[Stop]:
+    graph = nx.Graph()
+    for node in feed.stops.keys():
+        graph.add_node(node)
+    for node in feed.stops.keys():
+        graph.add_weighted_edges_from((
+            (neighbor.from_id, neighbor.to_id, neighbor.duration)
+            for neighbor in feed.neighbors(node)
+            if neighbor.from_id in feed.stops and neighbor.to_id in feed.stops
+        ))
+    return [
+        feed.stops[node]
+        for node in nx.approximation.traveling_salesman_problem(graph, cycle=False)
+    ]
 
 
 def heuristic(feed: Feed, from_node: str, remaining_stops: frozenset[str]) -> float:

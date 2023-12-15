@@ -75,22 +75,22 @@ class DoTransfer(Edge):
 
 class Feed:
     def __init__(self, stops: Iterable[Stop], transfers: Iterable[Transfer], edges: Iterable[Edge]):
-        all_stops: {str: Stop} = {
+        all_stops: dict[str: Stop] = {
             stop.stop_id: stop
             for stop in stops
         }
-        self.stop_equivalents: {str: str} = {}
+        self.stop_equivalents: dict[str: str] = {}
         for stop_id, stop in all_stops.items():
             while stop.parent_station is not None:
                 stop = all_stops[stop.parent_station]
             self.stop_equivalents[stop_id] = stop.stop_id
-        self.stops: {str: Stop} = {
+        self.stops: dict[str, Stop] = {
             stop.stop_id: stop
             for stop in all_stops.values()
             if stop.parent_station is None
         }
 
-        self.transfers: {str: {str: Transfer}} = {}
+        self.transfers: dict[str: dict[str: Transfer]] = {}
         for transfer in transfers:
             from_stop = self.stop_equivalents[transfer.from_stop]
             to_stop = self.stop_equivalents[transfer.to_stop]
