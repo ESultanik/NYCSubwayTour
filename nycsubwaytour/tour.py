@@ -7,16 +7,16 @@ from .gtfs import Feed
 
 def heuristic(feed: Feed, from_node: str, remaining_stops: frozenset[str]) -> float:
     leaves = feed.leaves & remaining_stops
-    if leaves:
-        return sum(
-            feed.leaf_branch_length[leaf]
-            for leaf in leaves
-        )
-    else:
-        return max(
-            feed.shortest_path_lengths[from_node][stop]
-            for stop in remaining_stops
-        )
+    # if leaves:
+    #     return sum(
+    #         feed.leaf_branch_length[leaf]
+    #         for leaf in leaves
+    #     )
+    # else:
+    return max(
+        feed.shortest_path_lengths[from_node][stop]
+        for stop in remaining_stops
+    )
 
 
 @dataclass(frozen=True, slots=True, unsafe_hash=True)
@@ -27,6 +27,8 @@ class SearchNode:
     f_cost: float = 0.0
 
     def __lt__(self, other):
+        if self.f_cost == other.f_cost:
+            return len(self.remaining_stops) < len(other.remaining_stops)
         return self.f_cost < other.f_cost
 
     def successors(self, feed: Feed) -> Iterator["SearchNode"]:
@@ -69,6 +71,14 @@ class SearchNode:
     def __str__(self):
         return (f"{len(self.path)} stops ({self.path_cost / 60 / 60:.1f}hrs), "
                 f"{len(self.remaining_stops)} ({(self.f_cost - self.path_cost) / 60 / 60:.1f}hrs) remaining")
+
+
+def find_solution(feed: Feed, node: SearchNode) -> SearchNode:
+    while node.remaining_stops:
+        node = min(node.successors(feed))
+        if len(node.path) % 20 == 0:
+            print(len(node.path))
+    return node
 
 
 def search(feed: Feed) -> SearchNode:
