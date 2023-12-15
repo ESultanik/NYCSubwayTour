@@ -75,13 +75,6 @@ class DoTransfer(Edge):
 
 class Feed:
     def __init__(self, stops: Iterable[Stop], transfers: Iterable[Transfer], edges: Iterable[Edge]):
-        self.transfers: {str: {str: Transfer}} = {}
-        for transfer in transfers:
-            if transfer.from_stop not in self.transfers:
-                self.transfers[transfer.from_stop] = {transfer.to_stop: transfer}
-            else:
-                self.transfers[transfer.from_stop][transfer.to_stop] = transfer
-
         all_stops: {str: Stop} = {
             stop.stop_id: stop
             for stop in stops
@@ -96,6 +89,15 @@ class Feed:
             for stop in all_stops.values()
             if stop.parent_station is None
         }
+
+        self.transfers: {str: {str: Transfer}} = {}
+        for transfer in transfers:
+            from_stop = self.stop_equivalents[transfer.from_stop]
+            to_stop = self.stop_equivalents[transfer.to_stop]
+            if from_stop not in self.transfers:
+                self.transfers[from_stop] = {to_stop: transfer}
+            else:
+                self.transfers[from_stop][to_stop] = transfer
 
         self.edges: {str: {str: Edge}} = {}
         for edge in edges:
@@ -118,7 +120,35 @@ class Feed:
         for stop in islanded_stops:
             del self.stops[stop]
 
+        self._leaves: Optional[set[str]] = None
+        self._leaf_branch_length: dict[str: int] = {}
         self._shortest_path_lengths: Optional[dict[str: dict[str: float]]] = None
+
+    @property
+    def leaves(self) -> set[str]:
+        if self._leaves is None:
+            self._leaves = {
+                stop
+                for stop in self.stops
+                if sum(1 for _ in self.neighbors(stop)) == 1
+            }
+        return self._leaves
+
+    @property
+    def leaf_branch_length(self) -> dict[str: int]:
+        if not self.leaves or self._leaf_branch_length:
+            return self._leaf_branch_length
+        for leaf in self.leaves:
+            node: str = leaf
+            history = {leaf}
+            while True:
+                successors = {n.to_id for n in self.neighbors(node)} - history
+                if len(successors) != 1:
+                    break
+                node = next(iter(successors))
+                history.add(node)
+            self._leaf_branch_length[leaf] = self.shortest_path_lengths[node][leaf]
+        return self._leaf_branch_length
 
     @property
     def shortest_path_lengths(self) -> dict[str: dict[str: float]]:

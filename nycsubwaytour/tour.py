@@ -2,16 +2,21 @@ from dataclasses import dataclass
 import heapq
 from typing import Iterator
 
-from .gtfs import Feed, Stop, Transfer
+from .gtfs import Feed
 
 
 def heuristic(feed: Feed, from_node: str, remaining_stops: frozenset[str]) -> float:
-    if from_node not in feed.shortest_path_lengths:
-        breakpoint()
-    return sum(
-        feed.shortest_path_lengths[from_node][stop]
-        for stop in remaining_stops
-    )
+    leaves = feed.leaves & remaining_stops
+    if leaves:
+        return sum(
+            feed.leaf_branch_length[leaf]
+            for leaf in leaves
+        )
+    else:
+        return max(
+            feed.shortest_path_lengths[from_node][stop]
+            for stop in remaining_stops
+        )
 
 
 @dataclass(frozen=True, slots=True, unsafe_hash=True)

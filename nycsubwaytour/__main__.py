@@ -7,7 +7,7 @@ def main() -> int:
     # Get rid of Staten Island!
     for stop in [s for s in feed.stops.keys() if s.startswith("S")]:
         del feed.stops[stop]
-    print(search(feed))
+    print(search(feed).path)
     return 0
 
 
