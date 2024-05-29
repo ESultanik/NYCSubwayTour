@@ -21,7 +21,11 @@ def main() -> int:
         else:
             num_visits = ""
         if i > 0 and prev_stop.stop_id in feed.transfers and s.stop_id in feed.transfers[prev_stop.stop_id]:
-            print("transfer lines")
+            if s in feed.routes_by_stop:
+                route_names = (str(route) for route in feed.routes_by_stop[s])
+                print(f"transfer lines {' / '.join(route_names)}")
+            else:
+                print(f"transfer lines")
         print(f"{i+1:3d} ({duration / 60 / 60:.1f}hrs):\t{s.name}{num_visits}")
         if i > 0:
             duration += feed.shortest_path_lengths[prev_stop.stop_id][s.stop_id]

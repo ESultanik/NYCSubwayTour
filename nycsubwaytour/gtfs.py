@@ -10,7 +10,7 @@ from zipfile import ZipFile
 from tqdm import tqdm
 
 
-@dataclass(frozen=True, slots=True, unsafe_hash=True)
+@dataclass(frozen=True, slots=True)
 class Stop:
     stop_id: str
     name: str
@@ -38,6 +38,12 @@ class Stop:
             parent_station=parent_station
         )
 
+    def __hash__(self):
+        return hash(self.stop_id)
+
+    def __eq__(self, other):
+        return isinstance(other, Stop) and self.stop_id == other.stop_id
+
 
 @dataclass(frozen=True, slots=True, unsafe_hash=True)
 class Transfer:
@@ -53,6 +59,50 @@ class Transfer:
             to_stop=to_stop_id.strip(),
             min_transfer_time=int(min_transfer_time),
         )
+
+
+@dataclass(frozen=True, slots=True)
+class Route:
+    route_id: str
+    route_short_name: str
+    route_long_name: str
+
+    def __hash__(self):
+        return hash(self.route_id)
+
+    def __str__(self):
+        return f"{self.route_long_name} ({self.route_short_name})"
+
+    @classmethod
+    def parse(cls, line: str) -> "Route":
+        _, route_id, route_short_name, route_long_name, *_ = line.strip().split(",")
+        return cls(
+            route_id=route_id.strip(),
+            route_short_name=route_short_name.strip(),
+            route_long_name=route_long_name.strip()
+        )
+
+
+@dataclass(frozen=True, slots=True, unsafe_hash=True)
+class Trip:
+    trip_id: str
+    route: Route
+    direction_id: str
+
+    @classmethod
+    def parse(cls, line: str, routes_by_id: dict[str, Route]) -> "Trip":
+        route_id, trip_id, _, _, direction_id, _ = line.strip().split(",")
+        route_id = route_id.strip()
+        if route_id not in routes_by_id:
+            raise ValueError(f"Unknown route_id {route_id!r}")
+        return cls(
+            trip_id=trip_id.strip(),
+            route=routes_by_id[route_id],
+            direction_id=direction_id.strip()
+        )
+
+    def __str__(self):
+        return f"Trip {self.trip_id} on route {self.route_id} in direction {self.direction_id}"
 
 
 class Edge:
@@ -74,7 +124,8 @@ class DoTransfer(Edge):
 
 
 class Feed:
-    def __init__(self, stops: Iterable[Stop], transfers: Iterable[Transfer], edges: Iterable[Edge]):
+    def __init__(self, stops: Iterable[Stop], transfers: Iterable[Transfer], edges: Iterable[Edge],
+                 routes_by_stop: dict[Stop, set[Route]]):
         all_stops: dict[str: Stop] = {
             stop.stop_id: stop
             for stop in stops
@@ -89,6 +140,7 @@ class Feed:
             for stop in all_stops.values()
             if stop.parent_station is None
         }
+        self.routes_by_stop: dict[Stop, set[Route]] = dict(routes_by_stop)
 
         self.transfers: dict[str: dict[str: Transfer]] = {}
         for transfer in transfers:
@@ -235,10 +287,26 @@ class Feed:
         if path_or_url.is_file():
             return cls.load(ZipFile(path_or_url))
 
+        with open(path_or_url / "routes.txt") as f:
+            # skip the first line because it is a header
+            _ = next(iter(f))
+            routes_by_id = {}
+            for line in f:
+                route = Route.parse(line)
+                routes_by_id[route.route_id] = route
+
+        with open(path_or_url / "trips.txt") as f:
+            # skip the first line because it is a header
+            _ = next(iter(f))
+            trips_by_id = {}
+            for line in f:
+                trip = Trip.parse(line, routes_by_id=routes_by_id)
+                trips_by_id[trip.trip_id] = trip
+
         # this is a directory
         edges: dict[tuple[str, str], list[int]] = {}
         trips: dict[str, list[str]] = {}
-        trips_by_stop: dict[str, set[str]] = {}
+        trips_by_stop: dict[str, set[Trip]] = {}
         with open(path_or_url / "stop_times.txt") as f:
             # skip the first line because it is a header
             _ = next(iter(f))
@@ -249,10 +317,13 @@ class Feed:
             for line in f:
                 trip_id, stop_id, arrival_time, departure_time, stop_sequence = line.strip().split(",")
                 trip_id = trip_id.strip()
+                if trip_id not in trips_by_id:
+                    raise ValueError(f"Unknown trip_id: {trip_id!r}, it is not in trips.txt!")
+                trip = trips_by_id[trip_id]
                 if stop_id not in trips_by_stop:
-                    trips_by_stop[stop_id] = {trip_id}
+                    trips_by_stop[stop_id] = {trip}
                 else:
-                    trips_by_stop[stop_id].add(trip_id)
+                    trips_by_stop[stop_id].add(trip)
                 arrival_hour, arrival_min, arrival_sec = map(int, arrival_time.split(":"))
                 arrival_time = arrival_hour * 60 * 60 + arrival_min * 60 + arrival_sec
                 stop_sequence = int(stop_sequence)
@@ -279,14 +350,14 @@ class Feed:
         # is there any trip where we pass through a station (e.g., an express train?)
         for edge in tqdm(edges, desc="Finding intermediate stops...", unit="edges", leave=False):
             intermediates: set[tuple[str, ...]] = set()
-            for trip_id in trips_by_stop[edge.from_id] | trips_by_stop[edge.to_id]:
-                trip = trips[trip_id]
+            for trip in trips_by_stop[edge.from_id] | trips_by_stop[edge.to_id]:
+                trip_stops = trips[trip.trip_id]
                 try:
-                    from_id_index = trip.index(edge.from_id)
-                    to_id_index = trip.index(edge.to_id)
+                    from_id_index = trip_stops.index(edge.from_id)
+                    to_id_index = trip_stops.index(edge.to_id)
                 except ValueError:
                     continue
-                intermediate_stops = tuple(trip[from_id_index+1:to_id_index])
+                intermediate_stops = tuple(trip_stops[from_id_index+1:to_id_index])
                 if intermediate_stops:
                     intermediates.add(intermediate_stops)
             if len(intermediates) > 1:
@@ -299,4 +370,10 @@ class Feed:
             _ = next(iter(f))
             with open(path_or_url / "transfers.txt") as t:
                 _ = next(iter(t))
-                return cls(stops=map(Stop.parse, f), transfers=map(Transfer.parse, t), edges=edges)
+                stops = [Stop.parse(line) for line in f]
+                return cls(stops=stops, transfers=map(Transfer.parse, t), edges=edges,
+                           routes_by_stop={
+                               stop: {trip.route for trip in trips_by_stop[stop.stop_id]}
+                               for stop in stops
+                               if stop.stop_id in trips_by_stop
+                           })
