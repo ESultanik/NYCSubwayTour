@@ -1,6 +1,7 @@
 from collections import defaultdict
 
 from .gtfs import Feed, Stop
+from .mapping import animate
 from .tour import approximate
 
 
@@ -14,7 +15,9 @@ def main() -> int:
     solution = approximate(feed)
     duration = 0
     prev_stop: Stop = solution[0]
+    waypoints: list[tuple[float, float]] = []
     for i, s in enumerate(solution):
+        waypoints.append((s.lat, s.lon))
         visits[s] += 1
         if visits[s] > 1:
             num_visits = f" (visit {visits[s]})"
@@ -32,6 +35,7 @@ def main() -> int:
         prev_stop = s
     print()
     print(f"Minimum expected time: {duration / 60 / 60:.1f}hrs")
+    animate(waypoints, "route.gif")
     return 0
 
 

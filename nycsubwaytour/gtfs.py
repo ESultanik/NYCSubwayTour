@@ -3,7 +3,7 @@ from io import BytesIO
 import itertools
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from typing import Iterable, Iterator, Optional
+from typing import Iterable, Iterator, Optional, Self
 import urllib.request
 from zipfile import ZipFile
 
@@ -88,17 +88,19 @@ class Trip:
     trip_id: str
     route: Route
     direction_id: str
+    shape_id: str
 
     @classmethod
     def parse(cls, line: str, routes_by_id: dict[str, Route]) -> "Trip":
-        route_id, trip_id, _, _, direction_id, _ = line.strip().split(",")
+        route_id, trip_id, _, _, direction_id, shape_id = line.strip().split(",")
         route_id = route_id.strip()
         if route_id not in routes_by_id:
             raise ValueError(f"Unknown route_id {route_id!r}")
         return cls(
             trip_id=trip_id.strip(),
             route=routes_by_id[route_id],
-            direction_id=direction_id.strip()
+            direction_id=direction_id.strip(),
+            shape_id=shape_id.strip()
         )
 
     def __str__(self):
@@ -119,13 +121,41 @@ class Edge:
         return isinstance(other, Edge) and other.from_id == self.from_id and other.to_id == self.to_id
 
 
+@dataclass(frozen=True, slots=True, unsafe_hash=True)
+class Shape:
+    shape_id: str
+    points: tuple[tuple[float, float]]
+
+    @classmethod
+    def parse(cls, lines: Iterable[str]) -> Iterator[Self]:
+        current_id: str | None = None
+        points: list[tuple[float, float]] = []
+
+        for line in lines:
+            sid, idx, lat, lon = line.strip().split(",")
+            idx = int(idx)
+            if current_id is None:
+                current_id = sid
+            elif current_id != sid:
+                yield cls(shape_id=current_id, points=tuple(points))
+                current_id = sid
+                points = []
+            if idx != len(points):
+                raise ValueError(f"Unexpected `shape_pt_sequence`: got {idx} but expected {len(points)} for shape_id "
+                                 f"{sid}")
+            points.append((float(lat), float(lon)))
+
+        if current_id is not None:
+            yield cls(shape_id=current_id, points=tuple(points))
+
+
 class DoTransfer(Edge):
     pass
 
 
 class Feed:
     def __init__(self, stops: Iterable[Stop], transfers: Iterable[Transfer], edges: Iterable[Edge],
-                 routes_by_stop: dict[Stop, set[Route]]):
+                 routes_by_stop: dict[Stop, set[Route]], shapes: Iterable[Shape]):
         all_stops: dict[str: Stop] = {
             stop.stop_id: stop
             for stop in stops
@@ -162,6 +192,11 @@ class Feed:
                 self.edges[from_stop] = {to_stop: edge}
             else:
                 self.edges[from_stop][to_stop] = edge
+
+        self.shapes_by_id: dict[str, Shape] = {
+            shape.shape_id: shape
+            for shape in shapes
+        }
 
         # Remove any stops that have no neighbors
         islanded_stops = {
@@ -303,6 +338,11 @@ class Feed:
                 trip = Trip.parse(line, routes_by_id=routes_by_id)
                 trips_by_id[trip.trip_id] = trip
 
+        with open(path_or_url / "shapes.txt") as f:
+            # skip the first line because it is a header
+            _ = next(iter(f))
+            shapes = tuple(Shape.parse(f))
+
         # this is a directory
         edges: dict[tuple[str, str], list[int]] = {}
         trips: dict[str, list[str]] = {}
@@ -376,4 +416,4 @@ class Feed:
                                stop: {trip.route for trip in trips_by_stop[stop.stop_id]}
                                for stop in stops
                                if stop.stop_id in trips_by_stop
-                           })
+                           }, shapes=shapes)
