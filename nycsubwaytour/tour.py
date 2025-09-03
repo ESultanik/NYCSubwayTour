@@ -1,4 +1,6 @@
+from collections import defaultdict
 from dataclasses import dataclass
+from functools import wraps
 import heapq
 from typing import Iterator
 
@@ -7,8 +9,11 @@ import networkx as nx
 from .gtfs import Feed, Stop
 
 
-def approximate(feed: Feed) -> list[Stop]:
-    graph = nx.Graph()
+def make_graph(feed: Feed, directed: bool = False) -> nx.Graph:
+    if directed:
+        graph = nx.DiGraph()
+    else:
+        graph = nx.Graph()
     for node in feed.stops.keys():
         graph.add_node(node)
     for node in feed.stops.keys():
@@ -17,6 +22,42 @@ def approximate(feed: Feed) -> list[Stop]:
             for neighbor in feed.neighbors(node)
             if neighbor.from_id in feed.stops and neighbor.to_id in feed.stops
         ))
+    return graph
+
+
+def feed_or_graph(func):
+    @wraps(func)
+    def wrapper(feed_or_graph: Feed | nx.Graph, *args, **kwargs):
+        if isinstance(feed_or_graph, Feed):
+            feed_or_graph = make_graph(feed_or_graph)
+        return func(feed_or_graph, *args, **kwargs)
+
+    return wrapper
+
+
+def centrality(feed: Feed) -> list[tuple[float, str]]:
+    graph = make_graph(feed, directed=True)
+    centralities = [
+        (c, feed.stops[node])
+        for node, c in nx.eigenvector_centrality(graph).items()
+    ]
+    # normalize the centralities so they sum to 1.0
+    total = sum(c for c, _ in centralities)
+    centralities = [
+        (c / total, n)
+        for c, n in centralities
+    ]
+    centralities_by_name: dict[str, float] = defaultdict(float)
+    for c, n in centralities:
+        centralities_by_name[n.name] += c
+    return sorted(
+        ((c, n) for n, c in centralities_by_name.items()),
+        reverse=True
+    )
+
+
+def approximate(feed: Feed) -> list[Stop]:
+    graph = make_graph(feed)
     return [
         feed.stops[node]
         for node in nx.approximation.traveling_salesman_problem(graph, cycle=False)

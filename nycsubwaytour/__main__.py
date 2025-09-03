@@ -1,7 +1,7 @@
 from collections import defaultdict
 
 from .gtfs import Feed, Stop
-from .tour import approximate
+from .tour import approximate, centrality
 
 
 def main() -> int:
@@ -32,6 +32,16 @@ def main() -> int:
         prev_stop = s
     print()
     print(f"Minimum expected time: {duration / 60 / 60:.1f}hrs")
+
+    print()
+    print("Eigenvector centrality:")
+    longest_stop_name = max(
+        len(stop.name) for stop in feed.stops.values()
+    )
+    for c, stop in centrality(feed):
+        if c >= 0.0001:
+            sn = f"{stop} "
+            print(f"{sn:.<{longest_stop_name + 1}} {c:0.4f}")
     return 0
 
 
