@@ -1,11 +1,27 @@
+import argparse
 from collections import defaultdict
+from pathlib import Path
 
 from .gtfs import Feed, Stop
 from .tour import approximate, centrality
 
 
 def main() -> int:
-    feed = Feed.load_or_download("http://web.mta.info/developers/data/nyct/subway/google_transit.zip")
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--no-cache", action="store_true", help="do not cache data")
+    parser.add_argument("--data-dir", type=Path, default=Path.cwd() / "data",
+                        help="data directory (default: ./data)")
+
+    args = parser.parse_args()
+
+    if not args.no_cache:
+        cache_path: Path | None = args.data_dir
+        cache_path.mkdir(parents=True, exist_ok=True)
+    else:
+        cache_path = None
+
+    feed = Feed.load_or_download("http://web.mta.info/developers/data/nyct/subway/google_transit.zip", path=cache_path)
+
     # Get rid of Staten Island!
     for stop in [s for s in feed.stops.keys() if s.startswith("S") and s != "S01"]:
         # print(f"Skipping {feed.stops[stop].name}")

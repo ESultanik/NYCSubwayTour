@@ -10,6 +10,15 @@ from zipfile import ZipFile
 from tqdm import tqdm
 
 
+def parse_csv(stream: Iterable[str]) -> Iterator[dict[str, str]]:
+    columns: list[str] | None = None
+    for line in stream:
+        if columns is None:
+            columns = line.strip().split(",")
+        else:
+            yield dict(zip(columns, line.strip().split(",")))
+
+
 @dataclass(frozen=True, slots=True)
 class Stop:
     stop_id: str
@@ -20,23 +29,23 @@ class Stop:
     parent_station: Optional[str]
 
     @classmethod
-    def parse(cls, line: str) -> "Stop":
-        stop_id, name, lat, lon, location_type, parent_station = line.strip().split(",")
-        try:
-            location_type = int(location_type)
-        except ValueError:
-            location_type = None
-        parent_station = parent_station.strip()
-        if not parent_station:
-            parent_station = None
-        return cls(
-            stop_id=stop_id,
-            name=name.strip(),
-            lat=float(lat),
-            lon=float(lon),
-            location_type=location_type,
-            parent_station=parent_station
-        )
+    def parse(cls, stream: Iterable[str]) -> Iterator["Stop"]:
+        for stop in parse_csv(stream):
+            try:
+                location_type: int | None = int(stop["location_type"])
+            except ValueError:
+                location_type = None
+            parent_station: str | None = stop["parent_station"].strip()
+            if not parent_station:
+                parent_station = None
+            yield cls(
+                stop_id=stop["stop_id"].strip(),
+                name=stop["stop_name"].strip(),
+                lat=float(stop["stop_lat"]),
+                lon=float(stop["stop_lon"]),
+                location_type=location_type,
+                parent_station=parent_station
+            )
 
     def __hash__(self):
         return hash(self.stop_id)
@@ -52,13 +61,13 @@ class Transfer:
     min_transfer_time: int
 
     @classmethod
-    def parse(cls, line: str) -> "Transfer":
-        from_stop_id, to_stop_id, _, min_transfer_time = line.strip().split(",")
-        return cls(
-            from_stop=from_stop_id.strip(),
-            to_stop=to_stop_id.strip(),
-            min_transfer_time=int(min_transfer_time),
-        )
+    def parse(cls, stream: Iterable[str]) -> Iterator["Transfer"]:
+        for transfer in parse_csv(stream):
+            yield cls(
+                from_stop=transfer["from_stop_id"].strip(),
+                to_stop=transfer["to_stop_id"].strip(),
+                min_transfer_time=int(transfer["min_transfer_time"]),
+            )
 
 
 @dataclass(frozen=True, slots=True)
@@ -74,13 +83,13 @@ class Route:
         return f"{self.route_long_name} ({self.route_short_name})"
 
     @classmethod
-    def parse(cls, line: str) -> "Route":
-        _, route_id, route_short_name, route_long_name, *_ = line.strip().split(",")
-        return cls(
-            route_id=route_id.strip(),
-            route_short_name=route_short_name.strip(),
-            route_long_name=route_long_name.strip()
-        )
+    def parse(cls, stream: Iterable[str]) -> Iterator["Route"]:
+        for route in parse_csv(stream):
+            yield cls(
+                route_id=route["route_id"].strip(),
+                route_short_name=route["route_short_name"].strip(),
+                route_long_name=route["route_long_name"].strip(),
+            )
 
 
 @dataclass(frozen=True, slots=True, unsafe_hash=True)
@@ -90,16 +99,16 @@ class Trip:
     direction_id: str
 
     @classmethod
-    def parse(cls, line: str, routes_by_id: dict[str, Route]) -> "Trip":
-        route_id, trip_id, _, _, direction_id, _ = line.strip().split(",")
-        route_id = route_id.strip()
-        if route_id not in routes_by_id:
-            raise ValueError(f"Unknown route_id {route_id!r}")
-        return cls(
-            trip_id=trip_id.strip(),
-            route=routes_by_id[route_id],
-            direction_id=direction_id.strip()
-        )
+    def parse(cls, stream: Iterable[str], routes_by_id: dict[str, Route]) -> Iterator["Trip"]:
+        for trip in parse_csv(stream):
+            route_id = trip["route_id"]
+            if route_id not in routes_by_id:
+                raise ValueError(f"Unknown route_id {route_id!r}")
+            yield cls(
+                trip_id=trip["trip_id"].strip(),
+                route=routes_by_id[route_id],
+                direction_id=trip["direction_id"].strip(),
+            )
 
     def __str__(self):
         return f"Trip {self.trip_id} on route {self.route_id} in direction {self.direction_id}"
@@ -265,68 +274,68 @@ class Feed:
         if path is None:
             path = Path.cwd()
         if path.exists() and (path.is_file() or path.is_dir() and (path / "stops.txt").exists()):
-            return cls.load(path)
+            return cls.load(path, cache_dir=path)
         else:
-            return cls.load(download_url)
+            return cls.load(download_url, cache_dir=path)
 
     @classmethod
-    def load(cls, path_or_url: Path | str | ZipFile) -> "Feed":
+    def load(cls, path_or_url: Path | str | ZipFile, cache_dir: Optional[Path] = None) -> "Feed":
         if isinstance(path_or_url, str):
             if Path(path_or_url).exists():
                 return cls.load(Path(path_or_url))
             else:
                 # this is a URL
                 response = urllib.request.urlopen(path_or_url)
-                return cls.load(ZipFile(BytesIO(response.read())))
+                return cls.load(ZipFile(BytesIO(response.read())), cache_dir=cache_dir)
         elif isinstance(path_or_url, ZipFile):
-            with TemporaryDirectory() as d:
-                path_or_url.extractall(d)
-                return cls.load(d)
+            if cache_dir is None:
+                with TemporaryDirectory() as d:
+                    path_or_url.extractall(d)
+                    return cls.load(d)
+            else:
+                path_or_url.extractall(cache_dir)
+                return cls.load(cache_dir)
         if not isinstance(path_or_url, Path):
             raise ValueError(f"argument must be a Path, str, or ZipFile, not {path_or_url!r}")
         if path_or_url.is_file():
-            return cls.load(ZipFile(path_or_url))
+            return cls.load(ZipFile(path_or_url), cache_dir=cache_dir)
 
         with open(path_or_url / "routes.txt") as f:
-            # skip the first line because it is a header
-            _ = next(iter(f))
-            routes_by_id = {}
-            for line in f:
-                route = Route.parse(line)
-                routes_by_id[route.route_id] = route
+            routes_by_id = {
+                route.route_id: route
+                for route in Route.parse(f)
+            }
 
         with open(path_or_url / "trips.txt") as f:
-            # skip the first line because it is a header
-            _ = next(iter(f))
-            trips_by_id = {}
-            for line in f:
-                trip = Trip.parse(line, routes_by_id=routes_by_id)
-                trips_by_id[trip.trip_id] = trip
+            trips_by_id = {
+                trip.trip_id: trip
+                for trip in Trip.parse(f, routes_by_id=routes_by_id)
+            }
 
         # this is a directory
         edges: dict[tuple[str, str], list[int]] = {}
         trips: dict[str, list[str]] = {}
         trips_by_stop: dict[str, set[Trip]] = {}
         with open(path_or_url / "stop_times.txt") as f:
-            # skip the first line because it is a header
-            _ = next(iter(f))
             last_trip_id = ""
             last_seq = -1
             last_stop_id = -1
             last_arrival_time = 0
-            for line in f:
-                trip_id, stop_id, arrival_time, departure_time, stop_sequence = line.strip().split(",")
-                trip_id = trip_id.strip()
+            for line in parse_csv(f):
+                trip_id = line["trip_id"].strip()
                 if trip_id not in trips_by_id:
                     raise ValueError(f"Unknown trip_id: {trip_id!r}, it is not in trips.txt!")
                 trip = trips_by_id[trip_id]
+                stop_id = line["stop_id"].strip()
                 if stop_id not in trips_by_stop:
                     trips_by_stop[stop_id] = {trip}
                 else:
                     trips_by_stop[stop_id].add(trip)
+                arrival_time = line["arrival_time"].strip()
+                departure_time = line["departure_time"].strip()
+                stop_sequence = int(line["stop_sequence"].strip())
                 arrival_hour, arrival_min, arrival_sec = map(int, arrival_time.split(":"))
                 arrival_time = arrival_hour * 60 * 60 + arrival_min * 60 + arrival_sec
-                stop_sequence = int(stop_sequence)
                 if trip_id == last_trip_id and stop_sequence == last_seq + 1:
                     while arrival_time < last_arrival_time:
                         arrival_time += 24 * 60 * 60
@@ -365,15 +374,11 @@ class Feed:
                 intermediates = {tuple(itertools.chain(*intermediates))}
             if intermediates:
                 edge.intermediate_stops = list(next(iter(intermediates)))
-        with open(path_or_url / "stops.txt") as f:
-            # skip the first line because it is a header
-            _ = next(iter(f))
-            with open(path_or_url / "transfers.txt") as t:
-                _ = next(iter(t))
-                stops = [Stop.parse(line) for line in f]
-                return cls(stops=stops, transfers=map(Transfer.parse, t), edges=edges,
-                           routes_by_stop={
-                               stop: {trip.route for trip in trips_by_stop[stop.stop_id]}
-                               for stop in stops
-                               if stop.stop_id in trips_by_stop
-                           })
+        with open(path_or_url / "stops.txt") as f, open(path_or_url / "transfers.txt") as t:
+            stops = list(Stop.parse(f))
+            return cls(stops=stops, transfers=Transfer.parse(t), edges=edges,
+                       routes_by_stop={
+                           stop: {trip.route for trip in trips_by_stop[stop.stop_id]}
+                           for stop in stops
+                           if stop.stop_id in trips_by_stop
+                       })
